@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="52b09485-2dec-484b-823d-4c6806701209" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/akkorddata/confusion_matrix.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/confusion_matrix.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/feature_dataset_better.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/feature_importance.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/feature_importance_better.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/feature_set_comparison.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/robustness_results.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/akkorddata/sample_length_results.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/akkorddata/feature.py" beforeDir="false" afterPath="$PROJECT_DIR$/akkorddata/feature.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/akkorddata/feature_dataset.csv" beforeDir="false" afterPath="$PROJECT_DIR$/akkorddata/feature_dataset.csv" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0
+}</component>
+  <component name="ProjectId" id="3BysF4Th6bssipbFrNu5zcLJgsS" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.feature.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/Emree/Desktop/lokalTML/tmlprojekt&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-ca5e2b39c7df-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.308" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="52b09485-2dec-484b-823d-4c6806701209" name="Changes" comment="" />
+      <created>1775472538434</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1775472538434</updated>
+    </task>
+    <servers />
+  </component>
+</project>

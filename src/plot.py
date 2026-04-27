@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 # =========================
 # FILER
 # =========================
-DATASET_FILE = Path("feature_dataset.csv")
-SEPARATION_FILE = Path("feature_separation_scores.csv")
+DATASET_FILE = Path("../../feature_dataset.csv")
+SEPARATION_FILE = Path("../../feature_separation_scores.csv")
 
 # =========================
 # LOAD DATA
@@ -102,7 +102,7 @@ make_group_heatmap(
     chroma_stft_features,
     class_order,
     "Heatmap af Chroma STFT pr. klasse",
-    "heatmap_chroma_stft.png",
+    "../../heatmap_chroma_stft.png",
     normalize=False
 )
 
@@ -111,7 +111,7 @@ make_group_heatmap(
     chroma_cens_features,
     class_order,
     "Heatmap af Chroma CENS pr. klasse",
-    "heatmap_chroma_cens.png",
+    "../../heatmap_chroma_cens.png",
     normalize=False
 )
 
@@ -120,7 +120,7 @@ make_group_heatmap(
     tonnetz_features,
     class_order,
     "Heatmap af Tonnetz pr. klasse",
-    "heatmap_tonnetz.png",
+    "../../heatmap_tonnetz.png",
     normalize=True
 )
 
@@ -129,7 +129,7 @@ make_group_heatmap(
     mfcc_features,
     class_order,
     "Heatmap af MFCC pr. klasse",
-    "heatmap_mfcc.png",
+    "../../heatmap_mfcc.png",
     normalize=True
 )
 
@@ -138,7 +138,7 @@ make_group_heatmap(
     spectral_features,
     class_order,
     "Heatmap af Spectral Centroid pr. klasse",
-    "heatmap_spectral_centroid.png",
+    "../../heatmap_spectral_centroid.png",
     normalize=True
 )
 

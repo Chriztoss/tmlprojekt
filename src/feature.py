@@ -4,22 +4,20 @@ import pandas as pd
 import librosa
 import warnings
 
-from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.inspection import permutation_importance
-
 warnings.filterwarnings("ignore")
 
 # =========================
 # INDSTILLINGER
 # =========================
 DATASET_PATH = Path(".")
-SEGMENT_LENGTHS = [0.5, 1.0, 2.0, 2.5]
-TARGET_SAMPLE_RATES = [8000]
+TARGET_SR = 8000
+SEGMENT_LENGTH = 2.5
 N_FFT = 2048
 HOP_LENGTH = 512
-RANDOM_STATE = 42
+N_MFCC = 5
+
+NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F',
+              'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 # =========================
 # HJÆLPEFUNKTIONER
@@ -27,7 +25,7 @@ RANDOM_STATE = 42
 def load_audio_segment(wav_path, target_sr=8000, segment_length=2.0):
     y, sr = librosa.load(wav_path, sr=target_sr, mono=True)
 
-    # trim stilhed væk
+    # Trim stilhed væk
     y, _ = librosa.effects.trim(y, top_db=25)
 
     needed_samples = int(segment_length * sr)
@@ -47,45 +45,63 @@ def load_audio_segment(wav_path, target_sr=8000, segment_length=2.0):
 def extract_features(y, sr):
     features = {}
 
-    # 1) RMS
-    rms = np.sqrt(np.mean(y**2))
-    features["rms"] = float(rms)
+    # Harmonisk del af signalet
+    y_harm = librosa.effects.harmonic(y)
 
-    # 2) Zero-crossing rate
-    zcr = librosa.feature.zero_crossing_rate(y)
-    features["zcr"] = float(np.mean(zcr))
-
-    # 3) Spectral centroid
+    # 1) Spectral centroid
     centroid = librosa.feature.spectral_centroid(
-        y=y, sr=sr, n_fft=N_FFT, hop_length=HOP_LENGTH
+        y=y,
+        sr=sr,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH
     )
     features["spectral_centroid"] = float(np.mean(centroid))
 
-    # 4) MFCC (brug gennemsnit af de første 5)
+    # 2) MFCC
     mfcc = librosa.feature.mfcc(
-        y=y, sr=sr, n_mfcc=5, n_fft=N_FFT, hop_length=HOP_LENGTH
+        y=y,
+        sr=sr,
+        n_mfcc=N_MFCC,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH
     )
     mfcc_mean = np.mean(mfcc, axis=1)
     for i, val in enumerate(mfcc_mean, start=1):
         features[f"mfcc_{i}"] = float(val)
 
-    # 5) Chroma STFT i stedet for Chroma CQT
-    chroma = librosa.feature.chroma_stft(
-        y=y,
+    # 3) Chroma STFT
+    chroma_stft = librosa.feature.chroma_stft(
+        y=y_harm,
         sr=sr,
         n_fft=N_FFT,
         hop_length=HOP_LENGTH,
         n_chroma=12
     )
-    chroma_mean = np.mean(chroma, axis=1)
+    chroma_stft_mean = np.mean(chroma_stft, axis=1)
+    for note, val in zip(NOTE_NAMES, chroma_stft_mean):
+        features[f"chroma_stft_{note}"] = float(val)
 
-    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F',
-                  'F#', 'G', 'G#', 'A', 'A#', 'B']
+    # 4) Chroma CENS
+    chroma_cens = librosa.feature.chroma_cens(
+        y=y_harm,
+        sr=sr,
+        hop_length=HOP_LENGTH,
+        n_chroma=12,
+        bins_per_octave=36,
+        n_octaves=6
+    )
+    chroma_cens_mean = np.mean(chroma_cens, axis=1)
+    for note, val in zip(NOTE_NAMES, chroma_cens_mean):
+        features[f"chroma_cens_{note}"] = float(val)
 
-    for note, val in zip(note_names, chroma_mean):
-        features[f"chroma_{note}"] = float(val)
+    # 5) Tonnetz
+    tonnetz = librosa.feature.tonnetz(chroma=chroma_stft, sr=sr)
+    tonnetz_mean = np.mean(tonnetz, axis=1)
+    for i, val in enumerate(tonnetz_mean, start=1):
+        features[f"tonnetz_{i}"] = float(val)
 
     return features
+
 
 def build_dataset(dataset_path, target_sr=8000, segment_length=2.0):
     rows = []
@@ -93,11 +109,21 @@ def build_dataset(dataset_path, target_sr=8000, segment_length=2.0):
     for class_dir in sorted(dataset_path.iterdir()):
         if not class_dir.is_dir():
             continue
+        if class_dir.name.startswith("."):
+            continue
+
+        wav_files = sorted(class_dir.glob("*.wav"))
+        if len(wav_files) == 0:
+            continue
 
         label = class_dir.name
 
-        for wav_file in sorted(class_dir.glob("*.wav")):
-            y, sr = load_audio_segment(wav_file, target_sr=target_sr, segment_length=segment_length)
+        for wav_file in wav_files:
+            y, sr = load_audio_segment(
+                wav_file,
+                target_sr=target_sr,
+                segment_length=segment_length
+            )
             feat = extract_features(y, sr)
             feat["label"] = label
             feat["filename"] = wav_file.name
@@ -106,46 +132,53 @@ def build_dataset(dataset_path, target_sr=8000, segment_length=2.0):
     return pd.DataFrame(rows)
 
 
-def evaluate_dataset(df):
+def feature_class_summary(df):
     feature_cols = [c for c in df.columns if c not in ["label", "filename"]]
-    X = df[feature_cols].values
-    y = df["label"].values
 
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
+    mean_table = df.groupby("label")[feature_cols].mean().T
+    std_table = df.groupby("label")[feature_cols].std().T
 
-    model = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE)
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-    scores = cross_val_score(model, X, y_enc, cv=cv, scoring="accuracy")
+    mean_table.columns = [f"{c}_mean" for c in mean_table.columns]
+    std_table.columns = [f"{c}_std" for c in std_table.columns]
 
-    return scores.mean(), scores.std(), feature_cols
+    summary = pd.concat([mean_table, std_table], axis=1)
+    return summary
 
 
-def top_features(df, n_top=5):
+def feature_separation_score(df):
     feature_cols = [c for c in df.columns if c not in ["label", "filename"]]
-    X = df[feature_cols].values
-    y = df["label"].values
+    labels = sorted(df["label"].unique())
 
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
+    results = []
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y_enc, test_size=0.25, stratify=y_enc, random_state=RANDOM_STATE
+    for feat in feature_cols:
+        class_means = []
+        class_stds = []
+
+        for label in labels:
+            values = df[df["label"] == label][feat].values
+            class_means.append(np.mean(values))
+            class_stds.append(np.std(values))
+
+        between_class = np.std(class_means)
+        within_class = np.mean(class_stds) + 1e-12
+        score = between_class / within_class
+
+        results.append({
+            "feature": feat,
+            "between_class_std": between_class,
+            "within_class_std": within_class,
+            "separation_score": score,
+            "min_class_mean": np.min(class_means),
+            "max_class_mean": np.max(class_means),
+            "mean_range": np.max(class_means) - np.min(class_means)
+        })
+
+    results_df = pd.DataFrame(results).sort_values(
+        "separation_score", ascending=False
     )
 
-    model = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE)
-    model.fit(X_train, y_train)
-
-    result = permutation_importance(
-        model, X_test, y_test, n_repeats=10, random_state=RANDOM_STATE
-    )
-
-    imp = pd.DataFrame({
-        "feature": feature_cols,
-        "importance": result.importances_mean
-    }).sort_values("importance", ascending=False)
-
-    return imp.head(n_top), imp
+    return results_df
 
 
 # =========================
@@ -153,84 +186,57 @@ def top_features(df, n_top=5):
 # =========================
 print("\n===== ANTAL FILER PR. KLASSE =====")
 for class_dir in sorted(DATASET_PATH.iterdir()):
-    if class_dir.is_dir():
-        n_files = len(list(class_dir.glob("*.wav")))
-        print(f"{class_dir.name}: {n_files}")
+    if not class_dir.is_dir():
+        continue
+    if class_dir.name.startswith("."):
+        continue
+
+    wav_files = list(class_dir.glob("*.wav"))
+    if len(wav_files) == 0:
+        continue
+
+    print(f"{class_dir.name}: {len(wav_files)}")
 
 # =========================
-# 2. TEST SAMPLELÆNGDE
+# 2. BYG FEATURE-DATASET
 # =========================
-print("\n===== TEST AF SAMPLELÆNGDE =====")
-length_results = []
+print("\n===== BYGGER FEATURE-DATASET =====")
+df = build_dataset(
+    DATASET_PATH,
+    target_sr=TARGET_SR,
+    segment_length=SEGMENT_LENGTH
+)
 
-for seg_len in SEGMENT_LENGTHS:
-    df = build_dataset(DATASET_PATH, target_sr=8000, segment_length=seg_len)
-    mean_acc, std_acc, _ = evaluate_dataset(df)
-    length_results.append((seg_len, mean_acc, std_acc))
-    print(f"{seg_len:.1f} s -> accuracy = {mean_acc:.3f} ± {std_acc:.3f}")
-
-best_segment = max(length_results, key=lambda x: x[1])[0]
-print(f"\nBedste sample-længde: {best_segment:.1f} s")
+print(df.head())
 
 # =========================
-# 3. TEST SAMPLE RATE
+# 3. BESKRIVELSE
 # =========================
-print("\n===== TEST AF SAMPLE RATE =====")
-sr_results = []
-
-for sr_test in TARGET_SAMPLE_RATES:
-    df = build_dataset(DATASET_PATH, target_sr=sr_test, segment_length=best_segment)
-    mean_acc, std_acc, _ = evaluate_dataset(df)
-    sr_results.append((sr_test, mean_acc, std_acc))
-    print(f"{sr_test} Hz -> accuracy = {mean_acc:.3f} ± {std_acc:.3f}")
-
-best_sr = max(sr_results, key=lambda x: x[1])[0]
-print(f"\nBedste sample rate: {best_sr} Hz")
+print("\n===== BESKRIVELSE AF FEATURES =====")
+print(df.describe())
 
 # =========================
-# 4. ENDELIGT DATASET
+# 4. FEATURE-SUMMARY PR. KLASSE
 # =========================
-print("\n===== BYGGER ENDELIGT DATASET =====")
-df_final = build_dataset(DATASET_PATH, target_sr=best_sr, segment_length=best_segment)
-
-print(df_final.head())
-print("\nBeskrivelse:")
-print(df_final.describe())
+print("\n===== FEATURE-SUMMARY PR. KLASSE =====")
+summary_df = feature_class_summary(df)
+print(summary_df.head(20))
 
 # =========================
-# 5. MEST BESKRIVENDE FEATURES
+# 5. FEATURES SORTERET EFTER ADSKILLELSE
 # =========================
-print("\n===== TOP 5 FEATURES =====")
-top5, all_features = top_features(df_final, n_top=5)
-print(top5)
+print("\n===== FEATURES SORTERET EFTER ADSKILLELSE =====")
+separation_df = feature_separation_score(df)
+print(separation_df.head(20))
 
 # =========================
-# 6. ENDELIG MODELKVALITET
+# 6. GEM RESULTATER
 # =========================
-print("\n===== ENDELIG EVALUERING =====")
-mean_acc, std_acc, feature_cols = evaluate_dataset(df_final)
-print(f"Accuracy = {mean_acc:.3f} ± {std_acc:.3f}")
+df.to_csv("feature_dataset.csv", index=False)
+summary_df.to_csv("feature_class_summary.csv")
+separation_df.to_csv("feature_separation_scores.csv", index=False)
 
-# =========================
-# 7. SVAR PÅ 'FULL CYCLE'
-# =========================
-print("\n===== FULL CYCLE =====")
-lowest_guitar_freq = 82.4  # E2
-samples_per_cycle = best_sr / lowest_guitar_freq
-print(f"Laveste guitarfrekvens antaget: {lowest_guitar_freq} Hz")
-print(f"Samples pr. periode ved {best_sr} Hz: {samples_per_cycle:.1f}")
-
-# =========================
-# 8. WINDOWING / OVERLAP
-# =========================
-print("\n===== WINDOWING =====")
-window_duration = N_FFT / best_sr
-overlap = 1 - (HOP_LENGTH / N_FFT)
-print(f"Vindueslængde: {window_duration:.3f} s")
-print(f"Overlap: {overlap*100:.1f}%")
-
-# =========================
-# 9. GEM FEATURES
-# =========================
-df_final.to_csv("feature_dataset.csv", index=False)
-print("\nFeature-datasæt gemt som feature_dataset.csv")
+print("\nFiler gemt:")
+print("- feature_dataset.csv")
+print("- feature_class_summary.csv")
+print("- feature_separation_scores.csv")

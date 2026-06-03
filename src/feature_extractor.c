@@ -51,10 +51,7 @@ static void build_hann_window(double *w, int n)
     }
 }
 
-/*
-   RAM-optimeret mel-filterbank:
-   Vi gemmer kun de 28 bin-punkter i stedet for en 26 x 1025 matrix.
-*/
+
 static void build_mel_bin_points(Feature2Extractor *fx)
 {
     const int n_bins = F2_SPEC_BINS;

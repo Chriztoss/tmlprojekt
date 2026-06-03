@@ -37,12 +37,6 @@ typedef struct
     double magnitude[F2_SPEC_BINS];
     double power[F2_SPEC_BINS];
 
-    /*
-       RAM-optimering:
-       Den gamle version gemte hele mel-filterbanken:
-       mel_fb[26][1025] som double, hvilket fyldte ca. 213 kB.
-       Denne version gemmer kun bin-grænserne og beregner vægte on-the-fly.
-    */
     int mel_bin_points[F2_NUM_MEL_BANDS + 2];
 
     int initialized;

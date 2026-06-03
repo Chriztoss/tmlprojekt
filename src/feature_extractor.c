@@ -8,522 +8,460 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define FE_EPS 1e-12f
+#define F2_EPS 1e-12
 
-static const char *NOTE_NAMES[FE_NUM_CHROMA] = {
+static const char *NOTE_NAMES[F2_NUM_CHROMA] = {
     "C", "C#", "D", "D#", "E", "F",
     "F#", "G", "G#", "A", "A#", "B"
 };
 
-static float hz_to_mel(float hz)
+static double hz_to_mel(double hz)
 {
-    return 2595.0f * log10f(1.0f + hz / 700.0f);
+    return 2595.0 * log10(1.0 + hz / 700.0);
 }
 
-static float mel_to_hz(float mel)
+static double mel_to_hz(double mel)
 {
-    return 700.0f * (powf(10.0f, mel / 2595.0f) - 1.0f);
+    return 700.0 * (pow(10.0, mel / 2595.0) - 1.0);
 }
 
-void feature_vector_zero(FeatureVector *fv)
+void feature2_vector_zero(Feature2Vector *fv)
 {
-    if (fv == NULL) return;
-    memset(fv, 0, sizeof(FeatureVector));
-}
-
-static void build_hann_window(float *w, int N)
-{
-    for (int n = 0; n < N; n++)
+    if (fv != NULL)
     {
-        w[n] = 0.5f - 0.5f * cosf((2.0f * (float)M_PI * (float)n) / (float)(N - 1));
+        memset(fv, 0, sizeof(Feature2Vector));
     }
 }
 
-static void clear_cens_history(FeatureExtractor *fx)
+/* Matcher feature2.py: 0.5 - 0.5*cos(2*pi*i/(N-1)) */
+static void build_hann_window(double *w, int n)
 {
-    memset(fx->cens_history, 0, sizeof(fx->cens_history));
-    fx->cens_index = 0;
-    fx->cens_count = 0;
-}
-
-static void build_chroma_filterbank(FeatureExtractor *fx)
-{
-    memset(fx->chroma_fb, 0, sizeof(fx->chroma_fb));
-
-    for (int k = 1; k < FE_SPEC_BINS; k++)
+    if (n <= 1)
     {
-        float freq = ((float)k * fx->sample_rate) / (float)FE_FRAME_LEN;
-
-        if (freq < 40.0f)
-            continue;
-
+        if (n == 1)
         {
-            float midi = 69.0f + 12.0f * log2f(freq / 440.0f);
-            float pc = fmodf(midi, 12.0f);
-            int pc0, pc1;
-            float frac;
-
-            if (pc < 0.0f)
-                pc += 12.0f;
-
-            pc0 = (int)floorf(pc);
-            pc1 = (pc0 + 1) % 12;
-            frac = pc - (float)pc0;
-
-            fx->chroma_fb[pc0][k] += (1.0f - frac);
-            fx->chroma_fb[pc1][k] += frac;
+            w[0] = 1.0;
         }
+        return;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        w[i] = 0.5 - 0.5 * cos((2.0 * (double)M_PI * (double)i) / (double)(n - 1));
     }
 }
 
-static void build_tonnetz_basis(FeatureExtractor *fx)
+/*
+   RAM-optimeret mel-filterbank:
+   Vi gemmer kun de 28 bin-punkter i stedet for en 26 x 1025 matrix.
+*/
+static void build_mel_bin_points(Feature2Extractor *fx)
 {
-    for (int pc = 0; pc < FE_NUM_CHROMA; pc++)
+    const int n_bins = F2_SPEC_BINS;
+
+    double mel_min = hz_to_mel(0.0);
+    double mel_max = hz_to_mel(fx->sample_rate * 0.5);
+
+    for (int i = 0; i < F2_NUM_MEL_BANDS + 2; i++)
     {
-        float p = (float)pc;
+        double mel = mel_min +
+                     (double)i * (mel_max - mel_min) /
+                     (double)(F2_NUM_MEL_BANDS + 1);
 
-        float angle_fifth     = 2.0f * (float)M_PI * (7.0f * p / 12.0f);
-        float angle_min_third = 2.0f * (float)M_PI * (3.0f * p / 12.0f);
-        float angle_maj_third = 2.0f * (float)M_PI * (4.0f * p / 12.0f);
+        double hz = mel_to_hz(mel);
 
-        fx->tonnetz_basis[0][pc] = cosf(angle_fifth);
-        fx->tonnetz_basis[1][pc] = sinf(angle_fifth);
+        int b = (int)floor(((double)F2_FRAME_LEN + 1.0) * hz / fx->sample_rate);
 
-        fx->tonnetz_basis[2][pc] = cosf(angle_min_third);
-        fx->tonnetz_basis[3][pc] = sinf(angle_min_third);
-
-        fx->tonnetz_basis[4][pc] = cosf(angle_maj_third);
-        fx->tonnetz_basis[5][pc] = sinf(angle_maj_third);
-    }
-}
-
-static void build_mel_filterbank(FeatureExtractor *fx)
-{
-    float fmin = 0.0f;
-    float fmax = fx->sample_rate * 0.5f;
-    float mel_min = hz_to_mel(fmin);
-    float mel_max = hz_to_mel(fmax);
-
-    float mel_points[FE_NUM_MEL_BANDS + 2];
-    float hz_points[FE_NUM_MEL_BANDS + 2];
-    int   bin_points[FE_NUM_MEL_BANDS + 2];
-
-    memset(fx->mel_fb, 0, sizeof(fx->mel_fb));
-
-    for (int i = 0; i < FE_NUM_MEL_BANDS + 2; i++)
-    {
-        float t = (float)i / (float)(FE_NUM_MEL_BANDS + 1);
-        int bin;
-
-        mel_points[i] = mel_min + t * (mel_max - mel_min);
-        hz_points[i] = mel_to_hz(mel_points[i]);
-
-        bin = (int)floorf(((float)FE_FRAME_LEN + 1.0f) * hz_points[i] / fx->sample_rate);
-
-        if (bin < 0) bin = 0;
-        if (bin >= FE_SPEC_BINS) bin = FE_SPEC_BINS - 1;
-
-        bin_points[i] = bin;
-    }
-
-    for (int m = 0; m < FE_NUM_MEL_BANDS; m++)
-    {
-        int left   = bin_points[m];
-        int center = bin_points[m + 1];
-        int right  = bin_points[m + 2];
-
-        if (center <= left) center = left + 1;
-        if (right <= center) right = center + 1;
-        if (right >= FE_SPEC_BINS) right = FE_SPEC_BINS - 1;
-
-        for (int k = left; k < center; k++)
+        if (b < 0)
         {
-            fx->mel_fb[m][k] = (float)(k - left) / (float)(center - left);
+            b = 0;
         }
 
-        for (int k = center; k < right; k++)
+        if (b >= n_bins)
         {
-            fx->mel_fb[m][k] = (float)(right - k) / (float)(right - center);
+            b = n_bins - 1;
         }
+
+        fx->mel_bin_points[i] = b;
     }
 }
 
-bool feature_extractor_init(FeatureExtractor *fx, float sample_rate)
+bool feature2_extractor_init(Feature2Extractor *fx, double sample_rate)
 {
     if (fx == NULL)
+    {
         return false;
+    }
 
-    memset(fx, 0, sizeof(FeatureExtractor));
+    memset(fx, 0, sizeof(Feature2Extractor));
 
     fx->sample_rate = sample_rate;
 
-    build_hann_window(fx->window, FE_FRAME_LEN);
-    build_chroma_filterbank(fx);
-    build_tonnetz_basis(fx);
-    build_mel_filterbank(fx);
-    clear_cens_history(fx);
+    build_hann_window(fx->window, F2_FRAME_LEN);
+    build_mel_bin_points(fx);
 
     fx->initialized = 1;
+
     return true;
 }
 
-static void copy_and_window_frame(
-    FeatureExtractor *fx,
-    const float *samples,
+static int is_power_of_two(uint32_t n)
+{
+    return n > 0 && ((n & (n - 1U)) == 0U);
+}
+
+static void bit_reverse(double *re, double *im, uint32_t n)
+{
+    uint32_t j = 0;
+
+    for (uint32_t i = 1; i < n; i++)
+    {
+        uint32_t bit = n >> 1;
+
+        while (j & bit)
+        {
+            j ^= bit;
+            bit >>= 1;
+        }
+
+        j ^= bit;
+
+        if (i < j)
+        {
+            double tr = re[i];
+            double ti = im[i];
+
+            re[i] = re[j];
+            im[i] = im[j];
+
+            re[j] = tr;
+            im[j] = ti;
+        }
+    }
+}
+
+static void fft_radix2(double *re, double *im, uint32_t n)
+{
+    if (!is_power_of_two(n))
+    {
+        return;
+    }
+
+    bit_reverse(re, im, n);
+
+    for (uint32_t length = 2; length <= n; length <<= 1)
+    {
+        double angle = -2.0 * (double)M_PI / (double)length;
+        double wlen_re = cos(angle);
+        double wlen_im = sin(angle);
+        uint32_t half = length >> 1;
+
+        for (uint32_t start = 0; start < n; start += length)
+        {
+            double w_re = 1.0;
+            double w_im = 0.0;
+
+            for (uint32_t k = start; k < start + half; k++)
+            {
+                uint32_t j = k + half;
+
+                double v_re = re[j] * w_re - im[j] * w_im;
+                double v_im = re[j] * w_im + im[j] * w_re;
+
+                double u_re = re[k];
+                double u_im = im[k];
+
+                re[k] = u_re + v_re;
+                im[k] = u_im + v_im;
+
+                re[j] = u_re - v_re;
+                im[j] = u_im - v_im;
+
+                double next_re = w_re * wlen_re - w_im * wlen_im;
+                double next_im = w_re * wlen_im + w_im * wlen_re;
+
+                w_re = next_re;
+                w_im = next_im;
+            }
+        }
+    }
+}
+
+static void compute_spectrum_for_frame(
+    Feature2Extractor *fx,
+    const double *samples,
     uint32_t start_idx,
     uint32_t num_samples
 )
 {
-    for (int n = 0; n < FE_FRAME_LEN; n++)
+    for (int n = 0; n < F2_FRAME_LEN; n++)
     {
         uint32_t idx = start_idx + (uint32_t)n;
-        float x = 0.0f;
+
+        double x = 0.0;
 
         if (idx < num_samples)
+        {
             x = samples[idx];
-
-        fx->frame[n] = x * fx->window[n];
-    }
-}
-
-static void compute_power_spectrum_naive(
-    const float *frame,
-    float *power_spec,
-    float sample_rate
-)
-{
-    (void)sample_rate;
-
-    for (int k = 0; k < FE_SPEC_BINS; k++)
-    {
-        float re = 0.0f;
-        float im = 0.0f;
-
-        for (int n = 0; n < FE_FRAME_LEN; n++)
-        {
-            float angle = -2.0f * (float)M_PI * (float)k * (float)n / (float)FE_FRAME_LEN;
-            re += frame[n] * cosf(angle);
-            im += frame[n] * sinf(angle);
         }
 
-        power_spec[k] = re * re + im * im;
+        fx->fft_re[n] = x * fx->window[n];
+        fx->fft_im[n] = 0.0;
+    }
+
+    fft_radix2(fx->fft_re, fx->fft_im, F2_FRAME_LEN);
+
+    for (int k = 0; k < F2_SPEC_BINS; k++)
+    {
+        double re = fx->fft_re[k];
+        double im = fx->fft_im[k];
+
+        double p = re * re + im * im;
+
+        fx->power[k] = p;
+        fx->magnitude[k] = sqrt(p);
     }
 }
 
-static float compute_spectral_centroid(
-    const float *power_spec,
-    float sample_rate
-)
+static double compute_centroid(const double *mag, double sample_rate)
 {
-    float num = 0.0f;
-    float den = 0.0f;
+    double numerator = 0.0;
+    double denominator = 0.0;
 
-    for (int k = 0; k < FE_SPEC_BINS; k++)
+    for (int k = 0; k < F2_SPEC_BINS; k++)
     {
-        float freq = ((float)k * sample_rate) / (float)FE_FRAME_LEN;
-        num += freq * power_spec[k];
-        den += power_spec[k];
+        double freq = ((double)k * sample_rate) / (double)F2_FRAME_LEN;
+
+        numerator += freq * mag[k];
+        denominator += mag[k];
     }
 
-    if (den < FE_EPS)
-        return 0.0f;
-
-    return num / den;
-}
-
-static void compute_chroma_stft(
-    const float power_spec[FE_SPEC_BINS],
-    const float chroma_fb[FE_NUM_CHROMA][FE_SPEC_BINS],
-    float chroma_out[FE_NUM_CHROMA]
-)
-{
-    float norm = 0.0f;
-
-    for (int c = 0; c < FE_NUM_CHROMA; c++)
-    {
-        float sum = 0.0f;
-
-        for (int k = 0; k < FE_SPEC_BINS; k++)
-        {
-            sum += chroma_fb[c][k] * power_spec[k];
-        }
-
-        chroma_out[c] = sum;
-        norm += sum * sum;
-    }
-
-    norm = sqrtf(norm) + FE_EPS;
-
-    for (int c = 0; c < FE_NUM_CHROMA; c++)
-    {
-        chroma_out[c] /= norm;
-    }
-}
-
-static float quantize_cens_value(float x)
-{
-    if (x > 0.40f) return 4.0f;
-    if (x > 0.20f) return 3.0f;
-    if (x > 0.10f) return 2.0f;
-    if (x > 0.05f) return 1.0f;
-    return 0.0f;
-}
-
-static void compute_chroma_cens(
-    FeatureExtractor *fx,
-    const float chroma_in[FE_NUM_CHROMA],
-    float cens_out[FE_NUM_CHROMA]
-)
-{
-    float temp[FE_NUM_CHROMA];
-    float l1 = 0.0f;
-    float norm = 0.0f;
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
-    {
-        l1 += fabsf(chroma_in[i]);
-    }
-    l1 += FE_EPS;
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
-    {
-        float x = chroma_in[i] / l1;
-        temp[i] = quantize_cens_value(x);
-    }
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
-    {
-        fx->cens_history[fx->cens_index][i] = temp[i];
-    }
-
-    fx->cens_index = (fx->cens_index + 1) % FE_CENS_HISTORY;
-    if (fx->cens_count < FE_CENS_HISTORY)
-        fx->cens_count++;
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
-    {
-        float sum = 0.0f;
-
-        for (int h = 0; h < fx->cens_count; h++)
-        {
-            sum += fx->cens_history[h][i];
-        }
-
-        cens_out[i] = sum / (float)fx->cens_count;
-        norm += cens_out[i] * cens_out[i];
-    }
-
-    norm = sqrtf(norm) + FE_EPS;
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
-    {
-        cens_out[i] /= norm;
-    }
-}
-
-static void compute_tonnetz(
-    const float tonnetz_basis[FE_NUM_TONNETZ][FE_NUM_CHROMA],
-    const float chroma_in[FE_NUM_CHROMA],
-    float tonnetz_out[FE_NUM_TONNETZ]
-)
-{
-    for (int t = 0; t < FE_NUM_TONNETZ; t++)
-    {
-        float sum = 0.0f;
-
-        for (int c = 0; c < FE_NUM_CHROMA; c++)
-        {
-            sum += tonnetz_basis[t][c] * chroma_in[c];
-        }
-
-        tonnetz_out[t] = sum;
-    }
+    return numerator / (denominator + F2_EPS);
 }
 
 static void compute_mfcc(
-    const float power_spec[FE_SPEC_BINS],
-    const float mel_fb[FE_NUM_MEL_BANDS][FE_SPEC_BINS],
-    float mfcc_out[FE_NUM_MFCC]
+    const double power[F2_SPEC_BINS],
+    const int mel_bin_points[F2_NUM_MEL_BANDS + 2],
+    double mfcc_out[F2_NUM_MFCC]
 )
 {
-    float log_mel[FE_NUM_MEL_BANDS];
+    double log_mel[F2_NUM_MEL_BANDS];
 
-    for (int m = 0; m < FE_NUM_MEL_BANDS; m++)
+    for (int m = 0; m < F2_NUM_MEL_BANDS; m++)
     {
-        float sum = 0.0f;
+        int left = mel_bin_points[m];
+        int center = mel_bin_points[m + 1];
+        int right = mel_bin_points[m + 2];
 
-        for (int k = 0; k < FE_SPEC_BINS; k++)
+        double e = 0.0;
+
+        if (center > left)
         {
-            sum += mel_fb[m][k] * power_spec[k];
+            for (int k = left; k < center && k < F2_SPEC_BINS; k++)
+            {
+                double w = (double)(k - left) / (double)(center - left);
+                e += power[k] * w;
+            }
         }
 
-        log_mel[m] = logf(sum + FE_EPS);
-    }
-
-    for (int n = 0; n < FE_NUM_MFCC; n++)
-    {
-        float acc = 0.0f;
-
-        for (int m = 0; m < FE_NUM_MEL_BANDS; m++)
+        if (right > center)
         {
-            acc += log_mel[m] *
-                   cosf((float)M_PI * (float)n * (2.0f * (float)m + 1.0f) /
-                        (2.0f * (float)FE_NUM_MEL_BANDS));
+            for (int k = center; k < right && k < F2_SPEC_BINS; k++)
+            {
+                double w = (double)(right - k) / (double)(right - center);
+                e += power[k] * w;
+            }
         }
 
-        mfcc_out[n] = acc;
+        log_mel[m] = log(e + F2_EPS);
     }
-}
 
-static void accumulate_features(FeatureVector *dst, const FeatureVector *src)
-{
-    dst->spectral_centroid += src->spectral_centroid;
-
-    for (int i = 0; i < FE_NUM_MFCC; i++)
-        dst->mfcc[i] += src->mfcc[i];
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
+    for (int k = 0; k < F2_NUM_MFCC; k++)
     {
-        dst->chroma_stft[i] += src->chroma_stft[i];
-        dst->chroma_cens[i] += src->chroma_cens[i];
-    }
+        double s = 0.0;
 
-    for (int i = 0; i < FE_NUM_TONNETZ; i++)
-        dst->tonnetz[i] += src->tonnetz[i];
+        for (int i = 0; i < F2_NUM_MEL_BANDS; i++)
+        {
+            double angle = (double)M_PI * (double)k * (2.0 * (double)i + 1.0) /
+                           (2.0 * (double)F2_NUM_MEL_BANDS);
+
+            s += log_mel[i] * cos(angle);
+        }
+
+        mfcc_out[k] = s;
+    }
 }
 
-static void divide_features(FeatureVector *fv, float denom)
+static int rounded_midi_from_freq(double freq)
 {
-    if (denom < FE_EPS)
-        return;
+    double midi = 69.0 + 12.0 * log2(freq / 440.0);
 
-    fv->spectral_centroid /= denom;
-
-    for (int i = 0; i < FE_NUM_MFCC; i++)
-        fv->mfcc[i] /= denom;
-
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
+    if (midi >= 0.0)
     {
-        fv->chroma_stft[i] /= denom;
-        fv->chroma_cens[i] /= denom;
+        return (int)floor(midi + 0.5);
     }
-
-    for (int i = 0; i < FE_NUM_TONNETZ; i++)
-        fv->tonnetz[i] /= denom;
+    else
+    {
+        return (int)ceil(midi - 0.5);
+    }
 }
 
-static bool process_one_frame(
-    FeatureExtractor *fx,
-    const float *samples,
-    uint32_t start_idx,
-    uint32_t num_samples,
-    FeatureVector *frame_features
+static void compute_chroma_from_magnitude(
+    const double magnitude[F2_SPEC_BINS],
+    double sample_rate,
+    double chroma_out[F2_NUM_CHROMA]
 )
 {
-    feature_vector_zero(frame_features);
+    for (int i = 0; i < F2_NUM_CHROMA; i++)
+    {
+        chroma_out[i] = 0.0;
+    }
 
-    copy_and_window_frame(fx, samples, start_idx, num_samples);
-    compute_power_spectrum_naive(fx->frame, fx->power_spec, fx->sample_rate);
+    for (int k = 1; k < F2_SPEC_BINS; k++)
+    {
+        double freq = ((double)k * sample_rate) / (double)F2_FRAME_LEN;
 
-    frame_features->spectral_centroid =
-        compute_spectral_centroid(fx->power_spec, fx->sample_rate);
+        if (freq < 50.0)
+        {
+            continue;
+        }
 
-    compute_chroma_stft(
-        fx->power_spec,
-        fx->chroma_fb,
-        frame_features->chroma_stft
-    );
+        int midi = rounded_midi_from_freq(freq);
+        int pitch_class = midi % 12;
 
-    compute_chroma_cens(
-        fx,
-        frame_features->chroma_stft,
-        frame_features->chroma_cens
-    );
+        if (pitch_class < 0)
+        {
+            pitch_class += 12;
+        }
 
-    compute_tonnetz(
-        fx->tonnetz_basis,
-        frame_features->chroma_stft,
-        frame_features->tonnetz
-    );
+        chroma_out[pitch_class] += magnitude[k];
+    }
 
-    compute_mfcc(
-        fx->power_spec,
-        fx->mel_fb,
-        frame_features->mfcc
-    );
+    double max_val = 0.0;
 
-    return true;
+    for (int i = 0; i < F2_NUM_CHROMA; i++)
+    {
+        if (chroma_out[i] > max_val)
+        {
+            max_val = chroma_out[i];
+        }
+    }
+
+    if (max_val > F2_EPS)
+    {
+        for (int i = 0; i < F2_NUM_CHROMA; i++)
+        {
+            chroma_out[i] /= max_val;
+        }
+    }
 }
 
-bool feature_extractor_process_segment(
-    FeatureExtractor *fx,
-    const float *samples,
+bool feature2_extract_segment(
+    Feature2Extractor *fx,
+    const double *samples,
     uint32_t num_samples,
-    FeatureVector *out_features
+    Feature2Vector *out_features
 )
 {
-    uint32_t frame_start = 0;
-    uint32_t frame_count = 0;
-
     if (fx == NULL || samples == NULL || out_features == NULL)
-        return false;
-
-    if (!fx->initialized)
-        return false;
-
-    feature_vector_zero(out_features);
-    clear_cens_history(fx);
-
-    while (frame_start < num_samples)
     {
-        FeatureVector frame_features;
-
-        if (!process_one_frame(fx, samples, frame_start, num_samples, &frame_features))
-            return false;
-
-        accumulate_features(out_features, &frame_features);
-        frame_count++;
-
-        if (num_samples <= FE_FRAME_LEN && frame_start == 0)
-            break;
-
-        frame_start += FE_HOP_LEN;
-
-        if (frame_start >= num_samples && num_samples >= FE_FRAME_LEN)
-            break;
+        return false;
     }
 
-    if (frame_count == 0)
+    if (!fx->initialized || num_samples == 0)
+    {
         return false;
+    }
 
-    divide_features(out_features, (float)frame_count);
+    feature2_vector_zero(out_features);
+
+    double centroid_sum = 0.0;
+    double mfcc_sums[F2_NUM_MFCC] = {0};
+    double chroma_sums[F2_NUM_CHROMA] = {0};
+
+    uint32_t n_frames = 0;
+    uint32_t start = 0;
+
+    while (1)
+    {
+        compute_spectrum_for_frame(fx, samples, start, num_samples);
+
+        double frame_mfcc[F2_NUM_MFCC];
+        double frame_chroma[F2_NUM_CHROMA];
+
+        centroid_sum += compute_centroid(fx->magnitude, fx->sample_rate);
+
+        compute_mfcc(fx->power, fx->mel_bin_points, frame_mfcc);
+        compute_chroma_from_magnitude(fx->magnitude, fx->sample_rate, frame_chroma);
+
+        for (int i = 0; i < F2_NUM_MFCC; i++)
+        {
+            mfcc_sums[i] += frame_mfcc[i];
+        }
+
+        for (int i = 0; i < F2_NUM_CHROMA; i++)
+        {
+            chroma_sums[i] += frame_chroma[i];
+        }
+
+        n_frames++;
+
+        if (num_samples <= F2_FRAME_LEN)
+        {
+            break;
+        }
+
+        start += F2_HOP_LEN;
+
+        if (start >= num_samples)
+        {
+            break;
+        }
+
+        if (start + F2_FRAME_LEN > num_samples && num_samples - start < F2_HOP_LEN)
+        {
+            break;
+        }
+    }
+
+    if (n_frames == 0)
+    {
+        n_frames = 1;
+    }
+
+    double inv_frames = 1.0 / (double)n_frames;
+
+    out_features->spectral_centroid = centroid_sum * inv_frames;
+
+    for (int i = 0; i < F2_NUM_MFCC; i++)
+    {
+        out_features->mfcc[i] = mfcc_sums[i] * inv_frames;
+    }
+
+    for (int i = 0; i < F2_NUM_CHROMA; i++)
+    {
+        out_features->chroma_stft[i] = chroma_sums[i] * inv_frames;
+    }
+
     return true;
 }
 
-void feature_debug_print(const FeatureVector *fv)
+void feature2_debug_print(const Feature2Vector *fv)
 {
     if (fv == NULL)
+    {
         return;
-
-    printf("spectral_centroid = %.6f\n", fv->spectral_centroid);
-
-    for (int i = 0; i < FE_NUM_MFCC; i++)
-    {
-        printf("mfcc_%d = %.6f\n", i + 1, fv->mfcc[i]);
     }
 
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
+    printf("spectral_centroid = %.9f\n", fv->spectral_centroid);
+
+    for (int i = 0; i < F2_NUM_MFCC; i++)
     {
-        printf("chroma_stft_%s = %.6f\n", NOTE_NAMES[i], fv->chroma_stft[i]);
+        printf("mfcc_%d = %.9f\n", i + 1, fv->mfcc[i]);
     }
 
-    for (int i = 0; i < FE_NUM_CHROMA; i++)
+    for (int i = 0; i < F2_NUM_CHROMA; i++)
     {
-        printf("chroma_cens_%s = %.6f\n", NOTE_NAMES[i], fv->chroma_cens[i]);
-    }
-
-    for (int i = 0; i < FE_NUM_TONNETZ; i++)
-    {
-        printf("tonnetz_%d = %.6f\n", i + 1, fv->tonnetz[i]);
+        printf("chroma_stft_%s = %.9f\n", NOTE_NAMES[i], fv->chroma_stft[i]);
     }
 }

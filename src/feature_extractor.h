@@ -1,5 +1,5 @@
-#ifndef FEATURE_EXTRACTOR_H
-#define FEATURE_EXTRACTOR_H
+#ifndef FEATURE2_EXTRACTOR_H
+#define FEATURE2_EXTRACTOR_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -8,56 +8,64 @@
 extern "C" {
 #endif
 
-#define FE_SAMPLE_RATE      8000.0f
-#define FE_FRAME_LEN        1024
-#define FE_HOP_LEN          512
-#define FE_SPEC_BINS        (FE_FRAME_LEN / 2 + 1)
+#define F2_SAMPLE_RATE      8000.0
+#define F2_FRAME_LEN        2048
+#define F2_HOP_LEN          512
+#define F2_SPEC_BINS        (F2_FRAME_LEN / 2 + 1)
 
-#define FE_NUM_MFCC         5
-#define FE_NUM_CHROMA       12
-#define FE_NUM_TONNETZ      6
-#define FE_NUM_MEL_BANDS    20
-#define FE_CENS_HISTORY     8
+#define F2_NUM_MFCC         5
+#define F2_NUM_CHROMA       12
+#define F2_NUM_MEL_BANDS    26
 
-typedef struct
-{
-    float spectral_centroid;
-    float mfcc[FE_NUM_MFCC];
-    float chroma_stft[FE_NUM_CHROMA];
-    float chroma_cens[FE_NUM_CHROMA];
-    float tonnetz[FE_NUM_TONNETZ];
-} FeatureVector;
+#define F2_NUM_FEATURES     (1 + F2_NUM_MFCC + F2_NUM_CHROMA)
 
 typedef struct
 {
-    float sample_rate;
+    double spectral_centroid;
+    double mfcc[F2_NUM_MFCC];
+    double chroma_stft[F2_NUM_CHROMA];
+} Feature2Vector;
 
-    float window[FE_FRAME_LEN];
-    float frame[FE_FRAME_LEN];
-    float power_spec[FE_SPEC_BINS];
+typedef struct
+{
+    double sample_rate;
 
-    float chroma_fb[FE_NUM_CHROMA][FE_SPEC_BINS];
-    float tonnetz_basis[FE_NUM_TONNETZ][FE_NUM_CHROMA];
-    float mel_fb[FE_NUM_MEL_BANDS][FE_SPEC_BINS];
+    double window[F2_FRAME_LEN];
+    double fft_re[F2_FRAME_LEN];
+    double fft_im[F2_FRAME_LEN];
 
-    float cens_history[FE_CENS_HISTORY][FE_NUM_CHROMA];
-    int cens_index;
-    int cens_count;
+    double magnitude[F2_SPEC_BINS];
+    double power[F2_SPEC_BINS];
+
+    /*
+       RAM-optimering:
+       Den gamle version gemte hele mel-filterbanken:
+       mel_fb[26][1025] som double, hvilket fyldte ca. 213 kB.
+       Denne version gemmer kun bin-grænserne og beregner vægte on-the-fly.
+    */
+    int mel_bin_points[F2_NUM_MEL_BANDS + 2];
 
     int initialized;
-} FeatureExtractor;
+} Feature2Extractor;
 
-void feature_vector_zero(FeatureVector *fv);
-bool feature_extractor_init(FeatureExtractor *fx, float sample_rate);
+void feature2_vector_zero(Feature2Vector *fv);
+bool feature2_extractor_init(Feature2Extractor *fx, double sample_rate);
 
-bool feature_extractor_process_segment(
-    FeatureExtractor *fx,
-    const float *samples,
+/*
+   samples skal helst allerede være preprocessing-matchet til feature2.py:
+   - samplet/resamplet til 8 kHz
+   - silence trimmet
+   - DC fjernet
+   - peak-normaliseret
+*/
+bool feature2_extract_segment(
+    Feature2Extractor *fx,
+    const double *samples,
     uint32_t num_samples,
-    FeatureVector *out_features
+    Feature2Vector *out_features
 );
 
-void feature_debug_print(const FeatureVector *fv);
+void feature2_debug_print(const Feature2Vector *fv);
 
 #ifdef __cplusplus
 }

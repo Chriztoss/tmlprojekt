@@ -1,0 +1,6 @@
+************************************* Invoked: Fri May 1 11:25:03 2026
+[0] Arguments: C:\Users\chris\AppData\Local\Temp\WinGet\MSYS2.MSYS2.20260322\msys2-x86_64-20260322.exe
+[4] Operations sanity check succeeded.
+[4] Warning: Cannot create lock file "C:\Users\chris\AppData\Local\Temp\msys2-x86_64-202603221234865.lock": The process cannot access the file because it is being used by another process.
+ (0x00000020)
+[22] UnableToStart : Unable to start installer : Another msys2-x86_64-20260322 instance is already running. Wait until it finishes, close it, or restart your system.

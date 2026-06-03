@@ -8,9 +8,6 @@
 extern "C" {
 #include "feature_extractor.h"
 }
-
-
-// KNN model
 #include "chord_knn_model_info.h"
 #include "chord_knn_model.h"
 
@@ -19,60 +16,37 @@ SYSTEM_MODE(MANUAL);
 const int LED_PIN = D7;
 
 // =========================
-// Indstillinger
+// SETTINGS
 // =========================
 #define RECORD_MS 500u
 #define AUDIO_SAMPLE_RATE_HZ 8000u
-
 #define AUDIO_SAMPLES ((AUDIO_SAMPLE_RATE_HZ * RECORD_MS) / 1000u)
 
 #define PDM_MAX_CHUNK_SAMPLES 512
-
-// KNN modellen har 294 training samples
-#define KNN_DISTANCE_BUFFER_SIZE 294
+#define KNN_DISTANCE_BUFFER_SIZE 512
 
 #define TRIM_TOP_DB 25.0f
-#define MAX_TRIM_FRAMES 16
+#define MAX_TRIM_FRAMES 64
 
 #define PRINT_FEATURES 0
 
 // =========================
-// Globale buffers
+// BUFFERS
 // =========================
-// feature_extractor bruger double, derfor double her.
 static double audio_buffer[AUDIO_SAMPLES];
-
 static int16_t pdm_chunk[PDM_MAX_CHUNK_SAMPLES];
 
 static float trim_rms_values[MAX_TRIM_FRAMES];
-static uint16_t trim_starts[MAX_TRIM_FRAMES];
+static uint32_t trim_starts[MAX_TRIM_FRAMES];
 
 static Feature2Extractor fx;
 
 static EmlNeighborsDistanceItem knn_distances[KNN_DISTANCE_BUFFER_SIZE];
 
 
-static const char *chord_name(int label)
-{
-    switch (label)
-    {
-        case 0: return "Adur";
-        case 1: return "Aisdur";
-        case 2: return "Bdur";
-        case 3: return "Cdur";
-        case 4: return "Cisdur";
-        case 5: return "Ddur";
-        case 6: return "Disdur";
-        case 7: return "Edur";
-        case 8: return "Fdur";
-        case 9: return "Fisdur";
-        case 10: return "Gdur";
-        case 11: return "Gisdur";
-        default: return "Unknown";
-    }
-}
-
-
+// =========================
+// TRIM SILENCE
+// =========================
 static void trim_silence_feature2(double *samples, uint32_t *length)
 {
     if (*length <= F2_FRAME_LEN)
@@ -100,8 +74,8 @@ static void trim_silence_feature2(double *samples, uint32_t *length)
             power += x * x;
         }
 
-        trim_rms_values[count] = (float)sqrt(power / (double)F2_FRAME_LEN);
-        trim_starts[count] = (uint16_t)start;
+        trim_rms_values[count] = sqrt(power / (double)F2_FRAME_LEN);
+        trim_starts[count] = start;
 
         count++;
         start += F2_HOP_LEN;
@@ -112,7 +86,7 @@ static void trim_silence_feature2(double *samples, uint32_t *length)
         return;
     }
 
-    float max_rms = 0.0f;
+    double max_rms = 0.0;
 
     for (uint32_t i = 0; i < count; i++)
     {
@@ -122,12 +96,12 @@ static void trim_silence_feature2(double *samples, uint32_t *length)
         }
     }
 
-    if (max_rms <= 1e-12f)
+    if (max_rms <= 1e-12)
     {
         return;
     }
 
-    float threshold = max_rms * powf(10.0f, -TRIM_TOP_DB / 20.0f);
+    double threshold = max_rms * pow(10.0, -TRIM_TOP_DB / 20.0);
 
     int first = -1;
     int last = -1;
@@ -150,8 +124,8 @@ static void trim_silence_feature2(double *samples, uint32_t *length)
         return;
     }
 
-    uint32_t start_sample = (uint32_t)trim_starts[first];
-    uint32_t end_sample = (uint32_t)trim_starts[last] + F2_FRAME_LEN;
+    uint32_t start_sample = trim_starts[first];
+    uint32_t end_sample = trim_starts[last] + F2_FRAME_LEN;
 
     if (end_sample > *length)
     {
@@ -168,6 +142,9 @@ static void trim_silence_feature2(double *samples, uint32_t *length)
 }
 
 
+// =========================
+// REMOVE DC + NORMALIZE
+// =========================
 static void remove_dc_and_peak_normalize(double *samples, uint32_t length)
 {
     if (length == 0)
@@ -207,6 +184,9 @@ static void remove_dc_and_peak_normalize(double *samples, uint32_t length)
 }
 
 
+// =========================
+// FEATURE VECTOR -> ARRAY
+// =========================
 static void feature_vector_to_float_array(const Feature2Vector *fv, float features[CHORD_KNN_NUM_FEATURES])
 {
     int idx = 0;
@@ -241,6 +221,8 @@ static void print_features(const float features[CHORD_KNN_NUM_FEATURES])
     for (int i = 0; i < CHORD_KNN_NUM_FEATURES; i++)
     {
         Serial.print(i);
+        Serial.print(" ");
+        Serial.print(CHORD_KNN_FEATURE_NAMES[i]);
         Serial.print(": ");
         Serial.println(features[i], 6);
     }
@@ -251,7 +233,7 @@ static void print_features(const float features[CHORD_KNN_NUM_FEATURES])
 
 
 // =========================
-// PDM audio capture
+// MICROPHONE CAPTURE
 // =========================
 static bool capture_audio_block()
 {
@@ -304,7 +286,7 @@ static bool capture_audio_block()
 
 
 // =========================
-// KNN prediction
+// KNN PREDICTION
 // =========================
 static int predict_knn(const float features[CHORD_KNN_NUM_FEATURES], unsigned long *time_us)
 {
@@ -339,6 +321,9 @@ static int predict_knn(const float features[CHORD_KNN_NUM_FEATURES], unsigned lo
 }
 
 
+// =========================
+// CLASSIFY AUDIO
+// =========================
 static void classify_audio()
 {
     uint32_t audio_len = AUDIO_SAMPLES;
@@ -376,7 +361,7 @@ static void classify_audio()
         Serial.println(knn_pred);
 
         Serial.print("KNN predicted chord: ");
-        Serial.println(chord_name(knn_pred));
+        Serial.println(CHORD_KNN_LABELS[knn_pred]);
     }
     else
     {
@@ -393,7 +378,7 @@ static void classify_audio()
 
 
 // =========================
-// setup / loop
+// SETUP / LOOP
 // =========================
 void setup()
 {
@@ -406,9 +391,8 @@ void setup()
     Serial.println();
     Serial.println("=================================");
     Serial.println("Photon2 live chord recognition");
-    Serial.println("PDM microphone -> 18 live features -> KNN model");
-    Serial.println("Features: centroid + 5 MFCC + 12 chroma_stft");
-    Serial.println("chroma_cens, tonnetz and Random Forest are disabled to reduce RAM");
+    Serial.println("PDM microphone -> features -> KNN model");
+    Serial.println("Random Forest disabled");
     Serial.println("=================================");
 
     Serial.print("AUDIO_SAMPLE_RATE_HZ: ");

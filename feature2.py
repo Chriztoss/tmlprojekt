@@ -1,16 +1,3 @@
-"""
-feature_manual_no_libs.py
-
-C-venlig feature extraction uden librosa, numpy og pandas.
-
-Vigtigt:
-- Denne fil prøver ikke at kopiere librosa 1:1.
-- Den laver de samme FEATURE-TYPER som din gamle fil:
-  spectral_centroid, MFCC og chroma_stft.
-- Funktionerne er skrevet med simple loops, så de senere er nemmere at oversætte til C.
-- Når du skifter fra librosa-features til disse manuelle features, skal modellen trænes igen.
-"""
-
 from pathlib import Path
 import csv
 import math
@@ -46,9 +33,6 @@ FEATURE_COLUMNS = (
 OUTPUT_COLUMNS = FEATURE_COLUMNS + ["label", "filename", "source_file", "segment_id"]
 
 
-# =========================
-# SMÅ HJÆLPEFUNKTIONER
-# =========================
 def mean(values):
     if len(values) == 0:
         return 0.0
